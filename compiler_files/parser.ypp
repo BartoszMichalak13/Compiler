@@ -1,0 +1,1686 @@
+%{
+// #define YYSTYPE int
+#include <fstream>
+#include <cstdio>
+#include <cstdarg>
+#include <cinttypes>
+
+#include "main_header.hpp"
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#define YYDEBUG 1 
+
+std::string ASM_CODE;
+std::string EXPRESSION_ASM_CODE;
+std::string CONDITION_ASM_CODE;
+std::string COMMANDS_ASM_CODE = "";
+std::vector<std::pair<std::string, int>> COMMANDS_ASM_CODE_vector;
+
+
+ int declaration_counter = 0;
+ int line_count = 0; // if procedury to 1 chyba
+ int mem_index = 0;
+ int proc_index = 0;
+ int proc_mem_index = 0;
+
+//holds name of current procedure
+ std::string PROC_NAME = "MAIN";
+
+
+ bool was_error = 0;
+
+// acts like var_vector but is used temporarly (like in proc_head/args_decl)
+std::vector<std::pair<std::pair<std::string,int>,int>> tmp_variable_vector;
+std::vector<std::pair<std::pair<std::string,int>,std::pair<std::string,int>>> args_variable_vector;
+
+
+
+static void yyerror(const char *msg);
+static int yyparse(void);
+int yylex(void);
+
+
+extern FILE *yyin;
+      
+#ifdef YAC_DEBUG
+#define pr_dbg(...) fprintf(stderr, __VA_ARGS__)
+#else
+#define pr_dbg(...)
+#endif
+
+%}
+
+%code requires 
+{
+    #include <cstdint>
+    #include <string>
+    #include "main_header.hpp"
+
+}
+
+%union
+{
+  Parser_token ptoken;
+
+  Comparision_struct cmp_struct;
+
+}
+
+
+%token num
+
+%token ADD // + 
+%token SUB // -
+%token MUL // *
+%token DIV // /
+%token MOD // %
+
+%token EQ // =
+%token LEQ // <=
+%token GEQ // >=
+%token NE // !=
+%token LT // <
+%token GT // >
+
+%token LBR // (
+%token RBR // )
+%token LSBR // [
+%token RSBR // ]
+
+%token PROCEDURE //
+%token IS //
+%token IN //
+%token END //
+%token PROGRAM //
+
+%token IF //
+%token THEN //
+%token ELSE //
+%token ENDIF //
+%token WHILE //
+%token DO //
+%token ENDWHILE //
+%token REPEAT //
+%token UNTIL //
+%token READ //
+%token WRITE //
+%token pidentifier //
+%token T // T
+
+%token ERR // %
+
+%token SEMI_COLON // ;
+%token COMMA // ,
+%token ASSIGNMENT // :=
+
+%type <ptoken> pidentifier
+%type <ptoken> ADD // + 
+%type <ptoken> SUB // -
+%type <ptoken> MUL // *
+%type <ptoken> DIV // /
+%type <ptoken> MOD // %
+
+%type <ptoken> EQ // =
+%type <ptoken> LEQ // <=
+%type <ptoken> GEQ // >=
+%type <ptoken> NE // !=
+%type <ptoken> LT // <
+%type <ptoken> GT // >
+
+%type <ptoken> LBR // (
+%type <ptoken> RBR // )
+%type <ptoken> LSBR // [
+%type <ptoken> RSBR // ]
+
+%type <ptoken> PROCEDURE //
+%type <ptoken> IS //
+%type <ptoken> IN //
+%type <ptoken> END //
+%type <ptoken> PROGRAM //
+
+%type <ptoken> IF //
+%type <ptoken> THEN //
+%type <ptoken> ELSE //
+%type <ptoken> ENDIF //
+%type <ptoken> WHILE //
+%type <ptoken> DO //
+%type <ptoken> ENDWHILE //
+%type <ptoken> REPEAT //
+%type <ptoken> UNTIL //
+%type <ptoken> READ //
+%type <ptoken> WRITE //
+%type <ptoken> T // T
+
+%type <ptoken> ERR // %
+
+%type <ptoken> SEMI_COLON // ;
+%type <ptoken> COMMA // ,
+%type <ptoken> ASSIGNMENT // :=
+
+%type <ptoken> num
+
+%type <ptoken> value
+%type <ptoken> identifier
+%type <ptoken> expression
+
+%type <cmp_struct> condition
+
+%type <ptoken> args
+%type <ptoken> command
+%type <ptoken> commands
+%type <ptoken> proc_call
+
+
+/*
+Based on proc head we push declarations into procedure vector
+*/
+
+
+/*
+a - obliczenia 
+b - memory addressing/num gen
+c,d - comparisions, expressions note: multiplication uses d,c not c,d
+*/
+%%
+program_all: procedures main {
+
+        }
+    ;
+
+procedures: procedures PROCEDURE proc_head IS declarations IN commands END {
+
+          //needed for jump incrementation
+          int lines_before = $7.line;
+
+          std::string WAY_BACK_ADDR = "WAY_BACK_ADDR";
+
+          //we make it type 0 as we at the entrance put in it value, so at the exit it is already there
+          add_to_vec("WAY_BACK_ADDR",mem_index,0,PROC_NAME,1);
+
+
+          int commands_index = search_code_index(lines_before);
+
+          std::string proc_name = PROC_NAME;
+
+          //we update procedures beg_line
+          if ( update_procedure_beg_line(proc_name, lines_before) ) {
+            yyerror(("ERROR in UPDATE PROCEDURE: " + proc_name + "\n").c_str()); 
+            // return 1;
+          }
+
+          //check if we have 2 or more vars of same name in proc
+          //ZLE POKAZUJE LINIE JAK COS TO WRZUC DO DEKLARATIONS
+          // if(check_no_repeats_variable(PROC_NAME)) {
+          //   yyerror(("ERROR 2 or more variables of same name in: " + PROC_NAME).c_str()); 
+          // }
+
+
+          //we clear it after declarations
+          tmp_variable_vector.clear();
+          
+          //lines for way back string 
+          int lines_in_between = line_count;
+
+          std::string reg1 = "b";
+          std::string register1 = reg1 + "\n";
+          std::string mode1 = "LOAD";
+
+          std::string way_back = gen_val_to_reg(WAY_BACK_ADDR, reg1, mode1);
+
+          way_back += "JUMPR a\n"; 
+          line_count += 1;
+
+          // at the end we add way to get out of procedure
+          add_to_COMMANDS_ASM_CODE_vector(way_back, lines_in_between);
+
+          //make whole procedure into one code-block
+          merge_commands(commands_index);
+          
+          //we increment jump so that it points to main
+          std::string jump_inc = incrementNumbersInString(COMMANDS_ASM_CODE_vector.at(0).first, line_count - lines_before);
+          COMMANDS_ASM_CODE_vector.at(0).first = jump_inc;
+
+          PROC_NAME = "MAIN";
+        }
+    | procedures PROCEDURE proc_head IS IN commands END {
+
+          //needed for jump incrementation
+          int lines_before = $6.line;
+
+          std::string WAY_BACK_ADDR = "WAY_BACK_ADDR";
+
+          //we make it type 0 as we at the entrance put in it value, so at the exit it is already there
+          add_to_vec("WAY_BACK_ADDR",mem_index,0,PROC_NAME,1);
+
+          int commands_index = search_code_index(lines_before);
+
+          std::string proc_name = PROC_NAME;
+
+          int check_update = update_procedure_beg_line(proc_name, lines_before);
+          //we update procedures beg_line
+          if ( check_update == -1 ) {
+            yyerror(("ERROR in UPDATE PROCEDURE: " + proc_name + "\n").c_str()); 
+            // return 1;
+          }
+
+          //check if we have 2 or more vars of same name in proc
+          // if(check_no_repeats_variable(PROC_NAME)) {
+          //   yyerror(("ERROR 2 or more variables of same name in: " + PROC_NAME).c_str()); 
+          // }
+          
+          int lines_in_between = line_count;
+
+          std::string reg1 = "b";
+          std::string register1 = reg1 + "\n";
+          std::string mode1 = "LOAD";
+
+          //mamy ciagle ten sam proc name wiec powinno byc ok
+          std::string way_back = gen_val_to_reg(WAY_BACK_ADDR, reg1, mode1);
+
+          way_back += "JUMPR a\n"; 
+          line_count += 1;
+
+          // at the end we add way to get out of procedure
+          add_to_COMMANDS_ASM_CODE_vector(way_back, lines_in_between);
+
+          //make whole procedure into one code-block
+          merge_commands(commands_index);
+
+          //we increment jump so that it points to main
+          std::string jump_inc = incrementNumbersInString(COMMANDS_ASM_CODE_vector.at(0).first, line_count - lines_before);
+          COMMANDS_ASM_CODE_vector.at(0).first = jump_inc;
+          
+          PROC_NAME = "MAIN";
+        } 
+    | %empty {
+
+          //this is first command in whole program, that jumps to well, main
+          // //so it should be updates at the end of each procedure
+          line_count++;
+          std::string jump_str = "JUMP " + std::to_string(line_count) + "\n";
+          std::pair<std::string, int> jump_pair (jump_str,0);
+          COMMANDS_ASM_CODE_vector.insert(COMMANDS_ASM_CODE_vector.begin(), jump_pair);
+
+        } 
+    ;
+    
+main: PROGRAM IS declarations IN commands END {
+
+          // std::cout << std::endl;
+          // std::cout << "MAIN" <<std::endl;
+          // std::cout << std::endl;
+          // std::cout << "main $5.line " << $5.line << std::endl;
+          // std::cout << "main $5.str " << *($5.str) << std::endl;
+
+          //check if we have 2 or more vars of same name in proc
+          // if(check_no_repeats_variable(PROC_NAME)) {
+            // yyerror(("ERROR 2 or more variables of same name in: " + PROC_NAME).c_str()); 
+          // }
+
+          //we add halt command at the end
+          std::string halt = "HALT \n";
+          line_count++;
+
+          //we push it into vector
+          add_to_COMMANDS_ASM_CODE_vector(halt, INT_MAX);
+          
+          //lets merge whole code into one string
+          merge_commands(0);
+
+          //final check if all is ok
+          if (check_string(COMMANDS_ASM_CODE_vector.at(0).first)) { 
+
+            //end write it to file
+            write_to_asm(COMMANDS_ASM_CODE_vector.at(0).first); 
+
+          } else { 
+
+            yyerror(("ERROR at the end (idk where)\n")); // + COMMANDS_ASM_CODE_vector.at(0).first).c_str()); 
+            // return 1;
+          }
+        }
+    | PROGRAM IS IN commands END {
+          // std::cout << std::endl;
+          // std::cout << "MAIN" <<std::endl;
+          // std::cout << std::endl;
+          // std::cout << "main $5.line " << $5.line << std::endl;
+          // std::cout << "main $5.str " << *($5.str) << std::endl;
+
+          //check if we have 2 or more vars of same name in proc
+          // if(check_no_repeats_variable(PROC_NAME)) {
+            // yyerror(("ERROR 2 or more variables of same name in: " + PROC_NAME).c_str()); 
+          // }
+
+          //we add halt command at the end
+          std::string halt = "HALT \n";
+          line_count++;
+
+          //we push it into vector
+          add_to_COMMANDS_ASM_CODE_vector(halt, INT_MAX);
+          
+          //lets merge whole code into one string
+          merge_commands(0);
+
+          //final check if all is ok
+          if (check_string(COMMANDS_ASM_CODE_vector.at(0).first)) { 
+
+            //end write it to file
+            write_to_asm(COMMANDS_ASM_CODE_vector.at(0).first); 
+
+          } else { 
+
+            yyerror(("ERROR at the end (idk where)\n"));
+            // return 1;
+          }
+        }
+    ;
+
+commands: commands command {
+          // std::cout << std::endl;
+          // std::cout << "COMMANDS MULTI" <<std::endl;
+          // std::cout << std::endl;
+          // // // We rutern MIN from all lines (begining of chain of commands)
+          // std::cout << "$1.line " << $1.line << std::endl;
+          // std::cout << "$1.str " << *($1.str) << std::endl;
+          // std::cout << "$2.line " << $2.line << std::endl;
+          // std::cout << "$2.str " << *($2.str) << std::endl;
+
+          if ( $1.line > $2.line ) { $$ = $2; } 
+          else { $$ = $1; }
+        }
+    | command {
+          // std::cout << std::endl;
+          // std::cout << "COMMANDS SINGLE" <<std::endl;
+          // std::cout << std::endl;
+          // std::cout << "single $1.line " << $1.line << std::endl;
+          // std::cout << "single $1.str " << *($1.str) << std::endl;
+          $$ = $1;
+        }
+    ;
+
+command: identifier ASSIGNMENT expression SEMI_COLON {
+
+          // std::cout << std::endl;
+          // std::cout << "COMMAND ASSIGNMENT" <<std::endl;
+          // std::cout << std::endl;
+
+          //#lines before expressions
+          int lines_befor_expression = $3.line;
+
+          std::pair<int,bool> var_data = search_variable(*($1.str), PROC_NAME);
+          //check if var is ok
+
+          if (var_data.first == -1) {
+            if (!var_data.second) {
+
+              // std::cout << "parer line: " << std::to_string(__LINE__) << std::endl;
+              yyerror(("ERROR: Procedure: " + PROC_NAME + " doesn't exist" + "\n").c_str());
+              return 1;
+            } else { 
+              // std::cout << "parer line: " << std::to_string(__LINE__) << std::endl;
+              yyerror(("ERROR: Procedure: " + PROC_NAME + " undeclared variable " + *($1.str) + "\n").c_str());
+              return 1;
+            }
+          } 
+          //we init identifier
+          add_to_var_init(var_data.first);
+
+          /*
+          Return token with line number befor opertations
+          */
+          Parser_token return_token;
+          std::string name = "assignment";
+          ptok_init(return_token, &name, lines_befor_expression);
+
+          // EXPRESSION_ASM_CODE was set in expression part
+          std::string expression = EXPRESSION_ASM_CODE;
+
+          std::string ret_val = expression;
+
+          std::string reg1 = "b";
+          std::string register1 = reg1 + "\n";
+
+          // we generate value to reg1 and then do mode operations
+
+          ret_val += get_ptoken_to_reg($1, reg1, "STORE");
+
+          // check if string is valid
+          if (check_string(ret_val)) { 
+
+            // we add current code at the end of vector
+            add_to_COMMANDS_ASM_CODE_vector(ret_val, lines_befor_expression);
+
+          } else { 
+
+            yyerror(("ERROR in ASSIGNMENT \n"));// + ret_val).c_str()); 
+            // return 1;
+          }
+
+          $$ = return_token;
+        }
+    | IF condition THEN commands ELSE commands ENDIF {
+
+          // std::cout << std::endl;
+          // std::cout << "COMMAND IF ELSE" <<std::endl;
+          // std::cout << std::endl;
+
+
+          //first lines in block of commands
+          int commands_1_lines = $4.line;
+          int commands_2_lines = $6.line;
+
+          /*
+          Return token with line number befor opertations
+          */
+          Parser_token return_token;
+          std::string name = "if else";
+          ptok_init(return_token, &name, commands_1_lines);
+
+
+
+          // posistion of blocks of commands in vector
+          int code1_index = search_code_index(commands_1_lines);
+          int code2_index = search_code_index(commands_2_lines);
+
+          //we update line count for jump below
+          line_count++;
+
+          //we create jump to the end of 2nd block of commands 
+          //we enter this jump after finishing first block of commands
+          std::string jump_str = "JUMP " + std::to_string(line_count) + "\n";
+
+          // create nice pair for COMMANDS_ASM_CODE_vector
+          std::pair<std::string, int> jump_pair (jump_str, commands_2_lines-1);
+
+          //insert that pair
+          COMMANDS_ASM_CODE_vector.insert(COMMANDS_ASM_CODE_vector.begin() + code2_index, jump_pair);
+
+
+          //if think that for code in second block we need to do +1 offset for all commands 
+          std::string offset_code = incrementNumbersInString(COMMANDS_ASM_CODE_vector.at(code2_index+1).first, 1);
+          COMMANDS_ASM_CODE_vector.at(code2_index+1).first = offset_code;
+
+
+          //and compress first block of commands, jump and second block of commands 
+          // (nothing should come after second block of commands)
+          merge_commands(code1_index);
+
+          // contains valueable info about condition
+          Comparision_struct cmp_struct = $2;
+
+          //generates code for condition 
+          //also updates code in COMMANDS_ASM_CODE_vector after condition
+          //with offset of condition line_count
+          //aka we add 7lines, we add 7 to all jumps later in code
+          //not sure if command_2_lines should be +1 ANS: IT IS IN THIS FUNCTIONS
+          std::string condition_asm_code = gen_if_else_condition( \
+                                              1, \
+                                              code1_index, \
+                                              commands_1_lines, \
+                                              commands_2_lines, \
+                                              cmp_struct);
+
+          //check if all is ok
+          if (check_string(condition_asm_code)) {
+            
+            //maybe change to actuall current lines?
+            //create pair for COMMANDS_ASM_CODE_vector
+            std::pair<std::string, int> command_code_and_lines (condition_asm_code, commands_1_lines);
+
+            //insert this pair in correct place (before blocks of code)
+            COMMANDS_ASM_CODE_vector.insert(COMMANDS_ASM_CODE_vector.begin() + code1_index, command_code_and_lines);
+
+            //lets merge it into one nice block of if-else code
+            merge_commands(code1_index);
+
+          } else { 
+
+            yyerror(("ERROR in IF ELSE: \n"));// + condition_asm_code).c_str()); 
+            // return 1;
+          }
+          
+          $$ = return_token;
+        }
+    | IF condition THEN commands ENDIF {
+
+
+          // std::cout << std::endl;
+          // std::cout << "COMMAND IF" <<std::endl;
+          // std::cout << std::endl;
+
+          int lines_befor_expression = $4.line;
+
+          /*
+          Return token with line number befor opertations
+          */
+          Parser_token return_token;
+          std::string name = "if";
+          ptok_init(return_token, &name, lines_befor_expression);
+
+          //first lines in block of commands
+
+          // posistion of blocks of commands in vector
+          int code1_index = search_code_index(lines_befor_expression);
+          merge_commands(code1_index);
+
+          // contains valueable info about condition
+          Comparision_struct cmp_struct = $2;
+
+          //generates code for condition 
+          //also updates code in COMMANDS_ASM_CODE_vector after condition
+          //with offset of condition line_count
+          //aka we add 7lines, we add 7 to all jumps later in code
+          //we use same function as in if-else but instead o commands2
+          //we give it current line count (so it'll jump out of if)
+          //WAIT ALE TAM JEST commmand count +1 przez jumpa ktorego nie ma
+          std::string condition_asm_code = gen_if_else_condition( \
+                                              2, \
+                                              code1_index, \
+                                              lines_befor_expression, \
+                                              line_count, \
+                                              cmp_struct);
+
+          //check if all is ok
+          if (check_string(condition_asm_code)) {
+            
+            //maybe change to actuall current lines?
+            //create pair for COMMANDS_ASM_CODE_vector
+            std::pair<std::string, int> command_code_and_lines (condition_asm_code, lines_befor_expression);
+
+            //insert this pair in correct place (before blocks of code)
+            COMMANDS_ASM_CODE_vector.insert(COMMANDS_ASM_CODE_vector.begin() + code1_index, command_code_and_lines);
+
+            //lets merge it into one nice block of if code
+            merge_commands(code1_index);
+
+          } else { 
+
+            yyerror(("ERROR in IF: \n"));// + condition_asm_code).c_str()); 
+            // return 1;
+          }
+
+          $$ = return_token;
+        }
+    | WHILE condition DO commands ENDWHILE {
+          // std::cout << std::endl;
+          // std::cout << "COMMAND WHILE" <<std::endl;
+          // std::cout << std::endl;
+
+
+          int lines_befor_expression = $4.line;
+     
+          /*
+          Return token with line number befor opertations
+          */
+          Parser_token return_token;
+          std::string name = "while";
+          ptok_init(return_token, &name, lines_befor_expression);
+
+          // posistion of blocks of commands in vector
+          int code1_index = search_code_index(lines_befor_expression);
+
+          merge_commands(code1_index);
+
+          // contains valueable info about condition
+          Comparision_struct cmp_struct = $2;
+
+          //generates code for condition 
+          //also updates code in COMMANDS_ASM_CODE_vector after condition
+          //with offset of condition line_count
+          //aka we add 7lines, we add 7 to all jumps later in code
+          //we use same function as in if-else but instead o commands2
+          //we give it current line count (so it'll jump out of while loop)
+          std::string condition_asm_code = gen_if_else_condition( \
+                                              3, \
+                                              code1_index, \
+                                              lines_befor_expression, \
+                                              line_count, \
+                                              cmp_struct);
+
+          //check if all is ok
+          if (check_string(condition_asm_code)) {
+
+            //maybe change to actuall current lines?
+            //create pair for COMMANDS_ASM_CODE_vector
+            std::pair<std::string, int> command_code_and_lines (condition_asm_code, lines_befor_expression);
+
+            //insert this pair in correct place (before blocks of code)
+            COMMANDS_ASM_CODE_vector.insert(COMMANDS_ASM_CODE_vector.begin() + code1_index, command_code_and_lines);
+
+            //lets merge it into one nice block of while code
+            merge_commands(code1_index);
+
+          } else { 
+
+            yyerror(("ERROR in WHILE: \n"));// + condition_asm_code).c_str()); 
+            // return 1;
+          }
+          $$ = return_token;
+        }
+        //TODO: CHECK IF REPEAT WORKS FINE
+    | REPEAT commands UNTIL condition SEMI_COLON {
+
+          // std::cout << std::endl;
+          // std::cout << "COMMAND REPEAT" <<std::endl;
+          // std::cout << std::endl;
+
+
+          //#lines before expressions
+          int lines_befor_expression = $2.line;
+
+          /*
+          Return token with line number befor opertations
+          */
+          Parser_token return_token;
+          std::string name = "repeat";
+          ptok_init(return_token, &name, lines_befor_expression);
+          
+          //type of condition returned in number
+          Comparision_struct cmp_struct = $4;
+
+          //generates code for condition
+          std::string condition_asm_code = gen_repeat_condition(lines_befor_expression, cmp_struct);
+
+          //check if all is ok
+          if (check_string(condition_asm_code)) {
+
+            add_to_COMMANDS_ASM_CODE_vector(condition_asm_code, lines_befor_expression);
+
+          } else { 
+
+            yyerror(("ERROR in REPEAT: \n"));// + condition_asm_code).c_str()); 
+            // return 1;
+          }
+          
+          // we finished reapeat block of commands so we compress it into
+          // one entity in vec, we start at the first command in chain
+          int code_index = search_code_index(lines_befor_expression);
+          merge_commands(code_index);
+
+          $$ = return_token;
+        }
+    | proc_call SEMI_COLON {
+          // std::cout << std::endl;
+          // std::cout << "COMMAND proc_call" <<std::endl;
+          // std::cout << std::endl;
+
+          /*
+          Return token with line number befor opertations
+          */
+          int lines_before = $1.line;
+          Parser_token return_token;
+          std::string name = "proc_call";
+          ptok_init(return_token, &name, lines_before);
+
+
+          $$ = return_token;
+        }
+    | READ identifier SEMI_COLON {
+
+          // std::cout << std::endl;
+          // std::cout << "COMMAND READ" <<std::endl;
+          // std::cout << std::endl;
+
+          //#lines before operations
+          int lines_before = line_count;
+
+
+          std::pair<int,bool> var_data = search_variable(*($2.str), PROC_NAME);
+
+          //check if var is ok
+
+          if (var_data.first == -1) {
+            if (!var_data.second) {
+
+              // std::cout << "parer line: " << std::to_string(__LINE__) << std::endl;
+              yyerror(("ERROR: Procedure: " + PROC_NAME + " doesn't exist" + "\n").c_str());
+              return 1;
+            } else { 
+              // std::cout << "parer line: " << std::to_string(__LINE__) << std::endl;
+              yyerror(("ERROR: Procedure: " + PROC_NAME + " undeclared variable " + *($1.str) + "\n").c_str());
+              return 1;
+            }
+          } 
+          //we init identifier
+          add_to_var_init(var_data.first);
+          
+
+          /*
+          Return token with line number befor opertations
+          */
+          Parser_token return_token;
+          std::string name = "read";
+          ptok_init(return_token, &name, lines_before);
+
+          std::string reg1 = "b";
+          std::string register1 = reg1 + "\n";
+
+          // we generate value to reg1 and then do mode operations
+
+          std::string ret_val = get_ptoken_to_reg($2, reg1, "READ STORE");
+
+          //check if string is valid
+          if (check_string(ret_val)) { 
+
+            add_to_COMMANDS_ASM_CODE_vector(ret_val, lines_before);
+
+          } else { 
+
+            yyerror(("ERROR in READ: \n"));// + ret_val).c_str()); 
+            // return 1;
+          }
+
+          $$ = return_token;
+        }
+    | WRITE value SEMI_COLON {
+
+          // std::cout << std::endl;
+          // std::cout << "COMMAND WRITE" <<std::endl;
+          // std::cout << std::endl;
+          
+          //#lines before operations
+          int lines_before = line_count;
+
+          /*
+          Return token with line number befor opertations
+          */
+          Parser_token return_token;
+          std::string name = "write";
+          ptok_init(return_token, &name, lines_before);
+
+          //reg 
+          std::string reg1 = "a";
+
+          //push value int reg1
+          std::string ret_val = get_ptoken_to_reg($2,reg1,"LOAD PUT");
+
+          ret_val += "WRITE \n";
+          line_count++;
+
+          //check if string is valid
+          if (check_string(ret_val)) { 
+
+            add_to_COMMANDS_ASM_CODE_vector(ret_val, lines_before);
+
+          } else { 
+
+            yyerror(("ERROR in WRITE: \n"));// + ret_val).c_str()); 
+            // return 1;
+          }
+
+          $$ = return_token;
+        }
+    ;
+
+proc_head: pidentifier LBR args_decl RBR {
+
+          PROC_NAME = *($1.str);
+
+          for (long unsigned int  i = 0; i < tmp_variable_vector.size(); i++) {
+            std::string var_name = tmp_variable_vector.at(i).first.first;
+            
+            if(check_no_repeats_variable(PROC_NAME, var_name)) {
+              yyerror(("ERROR 2 or more variables of name: " + var_name + " in: " + PROC_NAME + "\n").c_str()); 
+              return 1;
+              
+            }
+            //check size
+            if (tmp_variable_vector.at(i).second == 0) {
+
+              add_to_var_init(mem_index);
+              add_to_vec(var_name, mem_index, 1, PROC_NAME,0);
+              mem_index++;
+
+            } else {
+
+              //it may be size 1 bc it only points to variable which size may be different (hopefully)
+              add_to_var_init(mem_index);
+              add_to_vec(var_name, mem_index, 1, PROC_NAME,1);
+
+            }
+
+          } 
+
+          //we just add new procedure, later on we shall change INT MAX to linecount of proc
+          add_procedure(tmp_variable_vector, PROC_NAME, INT_MAX);
+          tmp_variable_vector.clear();
+
+          //maybe change it
+          // if(check_no_repeats_variable(PROC_NAME)) {
+          //   yyerror(("ERROR 2 or more variables of same name in proc_head of: " + PROC_NAME).c_str()); 
+          // }
+
+        }
+    ;
+
+proc_call: pidentifier LBR args RBR {
+
+          int lines_before = $3.line;
+
+          std::string proc_name = *($1.str);
+
+          int good_call = check_procedure(proc_name, PROC_NAME);
+          if (good_call == 1) {
+
+            yyerror(("ERROR: Procedure: " + proc_name + " not declared before: " + PROC_NAME + "\n").c_str());
+            return 1;
+
+
+          } else if (good_call == 2) {
+
+            yyerror(("ERROR: Procedure: " + proc_name + " called recursively\n").c_str());
+            return 1;
+
+          }
+
+          /*
+          Return token with line number befor opertations
+          */
+          Parser_token return_token;
+          std::string name = "proc_call " + proc_name;
+          ptok_init(return_token, &name, lines_before);
+
+          std::vector<std::pair<std::pair<int,std::string>,int>> values_vector;
+          for (long unsigned int i = 0; i < args_variable_vector.size(); i++) {
+
+            int var_ind = args_variable_vector.at(i).first.second;
+            int var_size = args_variable_vector.at(i).second.second;
+            std::string code_to_var = args_variable_vector.at(i).second.first;
+
+            std::pair<int,std::string> ind_code (var_ind, code_to_var);
+            std::pair<std::pair<int,std::string>,int> ind_code_size (ind_code, var_size);
+            values_vector.push_back(ind_code_size);
+          }
+          std::string final_proc_call_code = "";
+
+          //TO DO PO WYKRYCIU JEDNEGO BLEDU RETRN 
+
+          //JEZELI ODPALAM PROCEDURE W PROCEDURZE TO ZMODYFIKOWAC TAK, ZE TE TYPU 1 "ROZPAKUJ" AKA PODAJ ICH VALUES
+          std::string modify_vars_code = modify_variable_memory(proc_name, values_vector);
+          final_proc_call_code += modify_vars_code;
+          // print_var_vec();
+
+          //if we have error
+          if (!check_string(modify_vars_code)) {
+            yyerror((modify_vars_code + " in " + proc_name).c_str());
+            return 1;
+          }
+
+
+          //we clear it for future generations
+          args_variable_vector.clear();
+
+          // we get first line of given procedure 
+          int jump_coords = search_procedure_beg_line(proc_name);
+
+          //get lines from strk, i zrob tak zeby wyladaowac za strk i jumpem do odpowiedniej procedury
+          std::string WAY_BACK_ADDR = "WAY_BACK_ADDR";
+
+          std::pair<int,bool> way_back_data = search_variable(WAY_BACK_ADDR, proc_name);
+          int way_back_addr = way_back_data.first;
+          bool way_back_check = way_back_data.second;
+          if (way_back_check) {
+            yyerror(("ERROR: wrong type of WAY_BACK_ADDR in proc_call of: " + proc_name + "\n").c_str());
+            // return 1;
+          }
+
+
+          std::string reg1 = "f";
+          std::string register1 = reg1 + "\n";
+
+          std::string get_way_back_addr = gen_number_into_register(way_back_addr, reg1);
+          final_proc_call_code += get_way_back_addr;
+
+          std::string reg2 = "e";
+          std::string register2 = reg2 + "\n";
+
+          //we generater where procedure starts
+          std::string way_to_proc = gen_number_into_register(jump_coords, reg2);
+          final_proc_call_code += way_to_proc;
+
+          std::string reg3 = "g";
+          std::string register3 = reg3 + "\n";
+
+          //ADD(OFFSET) STORE LOAD JUMPR więc lądujemy + 5
+          std::string offset = gen_number_into_register(5, reg3);
+          final_proc_call_code += offset;
+
+          std::string way_back = "STRK a\n";
+
+          way_back += "ADD " + register3;
+          way_back += "STORE " + register1;
+          line_count += 3;
+          final_proc_call_code += way_back;
+
+          // std::string way_back = way_back_addr;
+          final_proc_call_code += "GET " + register2;
+          final_proc_call_code += "JUMPR a\n"; 
+          line_count += 2;
+
+
+          add_to_COMMANDS_ASM_CODE_vector(final_proc_call_code,lines_before);
+
+          $$ = return_token;
+        }
+    ;
+
+//we need them a bit different from procedures and main
+declarations: declarations COMMA pidentifier {
+
+          if(check_no_repeats_variable(PROC_NAME, *($3.str))) {
+            yyerror(("ERROR 2 or more variables of name: " + *($3.str) + " in: " + PROC_NAME + "\n").c_str()); 
+            return 1;
+
+          }
+
+          // std::cout << "pidentifier: " << *($3.str) << std::endl; 
+          declaration_counter++;
+          add_to_vec(*($3.str),mem_index,0,PROC_NAME,1);
+          // std::cout << "mem_index = " << mem_index << std::endl;
+
+        }
+    | declarations COMMA pidentifier LSBR num RSBR {
+
+          if(check_no_repeats_variable(PROC_NAME, *($3.str))) {
+            yyerror(("ERROR 2 or more variables of name: " + *($3.str) + " in: " + PROC_NAME + "\n").c_str()); 
+            return 1;
+
+          }
+          // std::cout << "pidentifier: " << *($3.str) << ", num: "<<  $5.val << std::endl;
+          declaration_counter += $5.val;
+      
+          int table_size = $5.val;
+          add_to_vec(*($3.str),mem_index,0,PROC_NAME,table_size);
+
+        }
+    | pidentifier {
+
+          if(check_no_repeats_variable(PROC_NAME, *($1.str))) {
+            yyerror(("ERROR 2 or more variables of name: " + *($1.str) + " in: " + PROC_NAME + "\n").c_str()); 
+            return 1;
+
+          }
+          // std::cout << "pidentifier: " << *($1.str) << std::endl;
+          declaration_counter++;
+          add_to_vec(*($1.str),mem_index,0,PROC_NAME,1);
+          // std::cout << "mem_index = " << mem_index << std::endl;
+
+        }
+    | pidentifier LSBR num RSBR {
+
+          if(check_no_repeats_variable(PROC_NAME, *($1.str))) {
+            yyerror(("ERROR 2 or more variables of name: " + *($1.str) + " in: " + PROC_NAME + "\n").c_str()); 
+            return 1;
+
+          }
+          // std::cout << "pidentifier: " << *($1.str) << ", num: "<<  $3.val << std::endl;
+          declaration_counter += $3.val;
+
+          int table_size = $3.val;
+          add_to_vec(*($1.str),mem_index,0,PROC_NAME,table_size);
+
+
+        }
+    ;
+
+args_decl: args_decl COMMA pidentifier {
+
+          // we add vars to tmp_variable_vector, used in proc_head
+          // later on in proc call we change INT MAX to given mem_index
+          // std::cout << "args decl pidentifier: " << *($3.str) << std::endl;
+          add_to_tmp_vec(*($3.str),INT_MAX,1);
+
+        }
+    | args_decl COMMA T pidentifier{
+      
+          // std::cout << "args decl pidentifier: " << *($4.str) << std::endl;
+          add_to_tmp_vec(*($4.str),INT_MAX,0);
+          
+        }
+    | pidentifier{
+
+          // we add vars to tmp_variable_vector, used in proc_head
+          // later on in proc call we change INT MAX to given mem_index
+          // std::cout << "args decl pidentifier: " << *($1.str) << std::endl;
+          add_to_tmp_vec(*($1.str),INT_MAX,1);
+
+        }
+    | T pidentifier{
+          
+          // std::cout << "args decl pidentifier: " << *($2.str) << std::endl;
+          add_to_tmp_vec(*($2.str),INT_MAX,0);
+          
+        }
+    ;
+args: args COMMA pidentifier {
+
+          std::string var_name = *($3.str);
+
+
+          //Token that we ruturn (it carries line_count)
+          Parser_token return_token;
+          std::string name = var_name;
+          ptok_init(return_token, &name, $1.line);
+
+
+          // std::cout << "args pidentifier: " << var_name << std::endl;
+
+          //we need to get mem cell for given pidentifier name // proc name to main
+          std::pair<int,bool> var_data = search_variable(var_name,PROC_NAME);
+          int var_index = var_data.first;
+          bool var_type = var_data.second;
+
+          std::string code_to_get_var_ind = "";
+          int var_size = get_variable_size(var_name,PROC_NAME);
+
+          if (var_type) {
+
+            //it has to be a reg bc of modify function in proc_call
+            std::string reg1 = "a";
+            std::string register1 = reg1 + "\n";
+            
+            code_to_get_var_ind = gen_number_into_register(var_index, reg1);
+            code_to_get_var_ind += "LOAD " + register1;
+            code_to_get_var_ind += "PUT " + register1;
+            
+            line_count += 2;
+            // var_index = -1;
+          }
+
+          std::pair<std::string,int> var_ind (var_name,var_index);
+          std::pair<std::string,int> code_size (code_to_get_var_ind, var_size);
+          std::pair<std::pair<std::string,int>,std::pair<std::string,int>> variable (var_ind, code_size);
+
+          args_variable_vector.push_back(variable);
+
+
+          $$ = return_token;
+
+        }
+    | pidentifier {
+
+
+          std::string var_name = *($1.str);
+
+          //Token that we ruturn (it carries line_count)
+          Parser_token return_token;
+          std::string name = var_name;
+          ptok_init(return_token, &name, line_count);
+
+          
+
+          // std::cout << "args pidentifier: " << var_name << std::endl;
+
+          //we need to get mem cell for given pidentifier name // proc name to main
+          std::pair<int,bool> var_data = search_variable(var_name,PROC_NAME);
+          int var_index = var_data.first;
+          bool var_type = var_data.second;
+          
+          std::string code_to_get_var_ind = "";
+          int var_size = get_variable_size(var_name,PROC_NAME);
+
+          if (var_type) {
+            
+            //it has to be a reg bc of modify function in proc_call
+            std::string reg1 = "a";
+            std::string register1 = reg1 + "\n";
+            
+            code_to_get_var_ind = gen_number_into_register(var_index, reg1);
+            code_to_get_var_ind += "LOAD " + register1;
+            code_to_get_var_ind += "PUT " + register1;
+            
+            line_count += 2;
+            // var_index = -1;
+
+          }
+
+
+          std::pair<std::string,int> var_ind (var_name,var_index);
+          std::pair<std::string,int> code_size (code_to_get_var_ind, var_size);
+          std::pair<std::pair<std::string,int>,std::pair<std::string,int>> variable (var_ind, code_size);
+
+          args_variable_vector.push_back(variable);
+
+
+          $$ = return_token;
+        }
+    ;
+
+expression: value       {
+
+          //Token that we ruturn (it carries line_count)
+          Parser_token return_token;
+          std::string name = "exp = do nothing";
+          ptok_init(return_token, &name, line_count);
+
+          //regs
+          std::string reg1 = "a";
+          std::string register1 = reg1 + "\n"; 
+
+          //numbers
+          std::string num1 = get_ptoken_to_reg($1,reg1,"LOAD PUT");
+
+          std::string ret_val = num1;
+
+          // save answer to global var
+          EXPRESSION_ASM_CODE = ret_val;
+
+          $$ = return_token;
+        }
+    | value ADD value   {  
+
+          //Token that we ruturn (it carries line_count)
+          Parser_token return_token;
+          std::string name = "add";
+          ptok_init(return_token, &name, line_count);
+
+          //regs
+          std::string reg1 = "c";
+          std::string reg2 = "d";
+
+          std::string register1 = reg1 + "\n"; 
+          std::string register2 = reg2 + "\n"; 
+
+          //numbers
+          std::string num1 = get_ptoken_to_reg($1,reg1,"LOAD PUT");
+          std::string num2 = get_ptoken_to_reg($3,reg2,"LOAD PUT");
+
+          //generate addition code
+          std::string add_code = "GET " + register1 + "ADD " + register2;
+          line_count += 2;
+
+          std::string ret_val = num1;
+          ret_val += num2;
+          ret_val += add_code;
+
+          // save answer to global var
+          EXPRESSION_ASM_CODE = ret_val;
+
+          $$ = return_token;
+        }
+    | value SUB value   {
+
+          //Token that we ruturn (it carries line_count)
+          Parser_token return_token;
+          std::string name = "sub";
+          ptok_init(return_token, &name, line_count);
+
+          //regs
+          std::string reg1 = "c";
+          std::string reg2 = "d";
+
+          std::string register1 = reg1 + "\n"; 
+          std::string register2 = reg2 + "\n"; 
+
+          //numbers
+          std::string num1 = get_ptoken_to_reg($1,reg1,"LOAD PUT");
+          std::string num2 = get_ptoken_to_reg($3,reg2,"LOAD PUT");
+
+          //generate substraction code
+          std::string sub_code = "GET " + register1 + "SUB " + register2;
+          line_count += 2;
+
+          std::string ret_val = num1;
+          ret_val += num2;
+          ret_val += sub_code;
+
+          // save answer to global var
+          EXPRESSION_ASM_CODE = ret_val;
+
+          $$ = return_token;
+        }
+    | value MUL value   {
+
+          // std::cout << std::endl;
+          // std::cout << "EXPRESSION MULTIPLY" <<std::endl;
+          // std::cout << std::endl;
+          
+          //Token that we ruturn (it carries line_count)
+          Parser_token return_token;
+          std::string name = "mul";
+          ptok_init(return_token, &name, line_count);
+
+          //regs
+          std::string reg1 = "c";
+          std::string reg2 = "d";
+
+          //numbers
+          std::string num1 = get_ptoken_to_reg($1,reg1,"LOAD PUT");
+          std::string num2 = get_ptoken_to_reg($3,reg2,"LOAD PUT");
+
+          //generate multiplication code
+          std::string multiplication_code = asm_multiplication_gen(line_count, reg1, reg2);
+
+          std::string ret_val = num1;
+          ret_val += num2;
+          ret_val += multiplication_code;
+
+          // save answer to global var
+          EXPRESSION_ASM_CODE = ret_val;
+
+          $$ = return_token;
+        }
+    | value DIV value   {
+
+          // std::cout << std::endl;
+          // std::cout << "EXPRESSION DIVIDE" <<std::endl;
+          // std::cout << std::endl;
+
+          //Token that we ruturn (it carries line_count)
+          Parser_token return_token;
+          std::string name = "div";
+          ptok_init(return_token, &name, line_count);
+          
+          //regs
+          std::string reg1 = "c";
+          std::string reg2 = "d";
+
+          //numbers
+          std::string num1 = get_ptoken_to_reg($1,reg1,"LOAD PUT");
+          std::string num2 = get_ptoken_to_reg($3,reg2,"LOAD PUT");
+
+          //generate division code
+          std::string division_code = asm_division_gen(line_count, reg1, reg2);
+
+          std::string ret_val = num1;
+          ret_val += num2;
+          ret_val += division_code;
+
+          // save answer to global var
+          EXPRESSION_ASM_CODE = ret_val;
+
+          $$ = return_token;
+        }
+    | value MOD value   {
+      
+          // std::cout << std::endl;
+          // std::cout << "EXPRESSION MODULO" <<std::endl;
+          // std::cout << std::endl;
+
+          //Token that we ruturn (it carries line_count)
+          Parser_token return_token;
+          std::string name = "mod";
+          ptok_init(return_token, &name, line_count);
+          
+          //regs NOTE: inverted vs DIV/MUL
+          std::string reg1 = "d";
+          std::string reg2 = "c";
+
+          //numbers
+          std::string num1 = get_ptoken_to_reg($1,reg1,"LOAD PUT");
+          std::string num2 = get_ptoken_to_reg($3,reg2,"LOAD PUT");
+
+          //generate modulo code
+          std::string modulo_code = asm_modulo_gen(line_count, reg1, reg2);
+
+          std::string ret_val = num1;
+          ret_val += num2;
+          ret_val += modulo_code;
+
+          // save answer to global var
+          EXPRESSION_ASM_CODE = ret_val;
+
+          $$ = return_token;
+        }
+    ;
+
+condition: value EQ value {
+          Comparision_struct ret_cmp;
+          cmp_struct_init(ret_cmp, 1, $1, $3);
+          $$ = ret_cmp;
+        }
+    | value NE value {
+          Comparision_struct ret_cmp;
+          cmp_struct_init(ret_cmp, 2, $1, $3);
+          $$ = ret_cmp;
+        }
+    | value LT value {
+          Comparision_struct ret_cmp;
+          cmp_struct_init(ret_cmp, 3, $1, $3);
+          $$ = ret_cmp;
+        }
+    | value GT value {
+          Comparision_struct ret_cmp;
+          cmp_struct_init(ret_cmp, 4, $1, $3);
+          $$ = ret_cmp;
+        }
+    | value LEQ value {
+          Comparision_struct ret_cmp;
+          cmp_struct_init(ret_cmp, 5, $1, $3);
+          $$ = ret_cmp;
+        }
+    | value GEQ value{
+          Comparision_struct ret_cmp;
+          cmp_struct_init(ret_cmp, 6, $1, $3);
+          $$ = ret_cmp;
+        }
+    ;
+
+value: num  {
+          $$ = $1;
+        }
+    | identifier {
+          //check if initialized
+
+          //we set in identifier mem_index_counter to val of this iden. index
+          //check if initialized, if not ret error
+          int ptok_type = check_ptoken_type($1);
+          std::pair<int,bool> var_data = search_variable(*($1.str),PROC_NAME);
+          // std::cout << "ptok_type " << ptok_type << " mem_index_counter " << mem_index_counter <<std::endl;
+          // if (ptok_type != 3) {  //dla 3 ciezko ocenic
+            // if (check_var_init(mem_index_counter)) {
+            if (check_var_init(var_data.first)) {
+
+              // std::cout << "parer line: " << std::to_string(__LINE__) << std::endl;
+              yyerror(("WARNING: Procedure: " + PROC_NAME + "; Variable: " + *($1.str) + " not initialized\n").c_str());
+              // return 1;
+
+            }
+            if (ptok_type == 3) {
+              std::pair<int,bool> table_index_var_data = search_variable(*($1.T_str),PROC_NAME);
+
+              // if (check_var_init(mem_index_counter)) {
+              if (check_var_init(table_index_var_data.first)) {
+
+                // std::cout << "parer line: " << std::to_string(__LINE__) << std::endl;
+                std::string msg = "WARNING: Procedure: " + PROC_NAME + "; Variable: "+ *($1.T_str) + " in expression " + *($1.str) + "["+ *($1.T_str) +"]"+ " not initialized\n";
+                yyerror((msg).c_str());
+                // return 1;
+              }
+            }
+          // } else {  //dla tab[var] mozna sprawdzic czy var zostala zainicjalizowana
+          //   // tu mem index odpowiada variable
+
+          // }
+
+          $$ = $1;
+        }
+    ;
+
+identifier: pidentifier {
+
+          //Token that we ruturn (it carries line_count)
+          std::string var_name = *($1.str);
+
+          Parser_token return_token;
+          ptok_init(return_token, $1.str, line_count, nullptr, -1);
+
+          std::pair<int,bool> var_data = search_variable(var_name,PROC_NAME);
+
+
+          //check if var is ok
+          if (var_data.first == -1) {
+            if (!var_data.second) {
+
+              // std::cout << "parer line: " << std::to_string(__LINE__) << std::endl;
+              yyerror(("ERROR: Procedure: " + PROC_NAME + " doesn't exist" + "\n").c_str());
+              return 1;
+            } else { 
+              // std::cout << "parer line: " << std::to_string(__LINE__) << std::endl;
+              yyerror(("ERROR: Procedure: " + PROC_NAME + " undeclared variable " + var_name + "\n").c_str());
+              return 1;
+            }
+          } 
+
+
+          //mozna tez sprawdzic czy to nie jest tablica
+          int var_size = get_variable_size(var_name, PROC_NAME);
+          if (var_size == -1) {
+            // std::cout << "parer line: " << std::to_string(__LINE__) << std::endl;
+            yyerror(("ERROR: Procedure: " + PROC_NAME + " can't find variable: " + var_name + "\n").c_str());
+            return 1;
+
+          } else if (var_size != 1) {
+
+            // std::cout << "parer line: " << std::to_string(__LINE__) << std::endl;
+            yyerror(("ERROR: Procedure: " + PROC_NAME + " bad usage of table: " + var_name + "\n").c_str());
+            return 1;
+
+          }
+          if (var_data.second) {
+
+            // std::cout << "check_var_init(var_data.first) " << check_var_init(var_data.first) <<std::endl;
+            add_to_var_init(var_data.first);
+            // std::cout << "check_var_init(var_data.first) " << check_var_init(var_data.first) <<std::endl;
+
+          } else {
+            int lc_before = line_count;
+            std::string reg1 = "z"; //we don't want to gen code for real, we just want mem cell
+            std::string usless_code = get_ptoken_to_reg(return_token, reg1, "NONE");
+            line_count = line_count - (line_count - lc_before);
+
+
+          }
+          $$ = return_token;
+        }
+    | pidentifier LSBR num RSBR {
+
+          //Token that we ruturn (it carries inportat table info)
+          Parser_token return_TAB_token;
+          ptok_init(return_TAB_token, $1.str, line_count, nullptr, $3.val);
+
+          std::pair<int,bool> var_data = search_variable(*($1.str),PROC_NAME);
+
+
+          //check if var is ok
+          
+          if (var_data.first == -1) {
+            if (!var_data.second) {
+
+              // std::cout << "parer line: " << std::to_string(__LINE__) << std::endl;
+              yyerror(("ERROR: Procedure: " + PROC_NAME + " doesn't exist" + "\n").c_str());
+              return 1;
+            } else { 
+              // std::cout << "parer line: " << std::to_string(__LINE__) << std::endl;
+              yyerror(("ERROR: Procedure: " + PROC_NAME + " undeclared variable " + *($1.str) + "\n").c_str());
+              return 1;
+            }
+          } 
+
+          if (var_data.second) {
+
+            // std::cout << "check_var_init(var_data.first) " << check_var_init(var_data.first) <<std::endl;
+            add_to_var_init(var_data.first);
+            // std::cout << "check_var_init(var_data.first) " << check_var_init(var_data.first) <<std::endl;
+
+          } else {
+
+            int lc_before = line_count;
+            std::string reg1 = "z"; //we don't want to gen code for real, we just want mem cell
+            std::string usless_code = get_ptoken_to_reg(return_TAB_token, reg1, "NONE");
+            line_count = line_count - (line_count - lc_before);
+
+
+          }
+          $$ = return_TAB_token;
+
+        }
+    | pidentifier LSBR pidentifier RSBR {
+      
+          //Token that we ruturn (it carries inportat table info)
+          Parser_token return_TAB_token;
+          ptok_init(return_TAB_token, $1.str, line_count, $3.str, -1);
+
+          std::pair<int,bool> var_data = search_variable(*($1.str),PROC_NAME);
+
+          //check if var is ok
+          
+          if (var_data.first == -1) {
+            if (!var_data.second) {
+
+              // std::cout << "parer line: " << std::to_string(__LINE__) << std::endl;
+              yyerror(("ERROR: Procedure: " + PROC_NAME + " doesn't exist" + "\n").c_str());
+              return 1;
+            } else { 
+              // std::cout << "parer line: " << std::to_string(__LINE__) << std::endl;
+              yyerror(("ERROR: Procedure: " + PROC_NAME + " undeclared variable " + *($1.str) + "\n").c_str());
+              return 1;
+            }
+          } 
+
+          //check var pointing to index
+          std::pair<int,bool> var_data_2 = search_variable(*($3.str),PROC_NAME);
+
+          //check if var is ok
+          
+          if (var_data_2.first == -1) {
+            if (!var_data_2.second) {
+
+              // std::cout << "parer line: " << std::to_string(__LINE__) << std::endl;
+              yyerror(("ERROR: Procedure: " + PROC_NAME + " doesn't exist" + "\n").c_str());
+              return 1;
+            } else { 
+              // std::cout << "parer line: " << std::to_string(__LINE__) << std::endl;
+              yyerror(("ERROR: Procedure: " + PROC_NAME + " undeclared variable " + *($3.str) + "\n").c_str());
+              return 1;
+            }
+          } 
+
+          if (var_data.second) {
+
+            // std::cout << "check_var_init(var_data.first) " << check_var_init(var_data.first) <<std::endl;
+            add_to_var_init(var_data.first);
+            // std::cout << "check_var_init(var_data.first) " << check_var_init(var_data.first) <<std::endl;
+
+            if (var_data_2.second) {
+              // std::cout << "check_var_init(var_data_2.first) " << check_var_init(var_data_2.first) <<std::endl;
+              add_to_var_init(var_data_2.first);
+              // std::cout << "check_var_init(var_data_2.first) " << check_var_init(var_data_2.first) <<std::endl;
+
+            }
+          } else { 
+            int lc_before = line_count;
+            std::string reg1 = "z"; //we don't want to gen code for real, we just want mem cell
+            std::string usless_code = get_ptoken_to_reg(return_TAB_token, reg1, "NONE");
+            line_count = line_count - (line_count - lc_before);
+          }
+          $$ = return_TAB_token;
+
+        }
+    ;
+
+%%
+
+static void yyerror(const char* msg)
+{
+    std::cerr <<  msg << " w linii " << yylval.ptoken.line << std::endl;
+    /* std::cerr << "mem index: " << mem_index << std::endl; */
+
+
+    int i = 0;
+    int j = 0;
+
+    bool is_warning = false;
+    const char* w2 = "WARNING";
+    while(msg[i] != '\n')
+    {
+        if(msg[i] == w2[j])
+        {
+            while (msg[i] == w2[j] && w2[j] != '\0')
+            {
+                j++;
+                i++;
+            }
+
+            if(w2[j] == '\0')
+            {
+                is_warning =  true;
+            }
+            j = 0;
+        }
+
+        i++;
+    }
+    /* std::cerr << yylval.ptoken.str << std::endl; */
+    if (!is_warning) {
+      was_error = 1;
+    }
+    is_warning = false;
+    /* return 1; */
+}
+
+
+void usage(void)
+{
+  printf("Kompilator 2023\n"); 
+  printf("./kompilator plik_z_kodem plik_do_ktorego_zapiszemy_asembler\n");
+}
+
+int main(int argc, char *argv[])
+{
+  if (argc < 3)
+  {
+      usage();
+      return 1;
+  }
+  const char* in_file = argv[1];
+  const char* out_file = argv[2];
+  yyin = fopen(in_file, "r");
+  const int ret = yyparse();
+  fclose(yyin);
+
+  //print ASM_CODE to file
+  std::ofstream asm_file(out_file);
+  if (!was_error) {
+    asm_file << ASM_CODE;
+  }
+
+
+  asm_file.close();
+
+
+  /* //Some prints for my knowledge
+  printf("declaration_counter: %d\n", declaration_counter);
+
+  for (long unsigned int  i = 0; i < variable_vector.size(); i++) {
+    std::cout << "var_name: " << variable_vector.at(i).first.first.first << " mem_cell: "\
+     << variable_vector.at(i).first.first.second << " var_type: " << variable_vector.at(i).first.second.first \
+     << " proc_name: " << variable_vector.at(i).first.second.second << " was_initialized " <<  variable_vector.at(i).second.first\
+      << " size: " << variable_vector.at(i).second.second << std::endl;
+  }
+
+
+  //sort initilized mem cells
+  std::sort(mem_init_vec.begin(), mem_init_vec.end());
+   std::cout << "initialized cells: "<<std::endl;
+  for (long unsigned int  i = 0; i < mem_init_vec.size(); i++) {
+    std::cout << "\t" << mem_init_vec.at(i) << std::endl;
+  }
+
+  printf("line_count: %d\n", line_count);
+  printf("proc_index: %d\n", proc_index);
+  printf("ret: %d\n", ret); */
+
+  return 0;
+}
+
+/*
+  X błąd: niezadeklarowana zmienna
+  X błąd: niezainicjowana zmienna
+  X błąd: niewłaściwe użycie tablicy /bez[]
+  X błąd: niewłaściwe użycie tablicy /bez[]
+  X błąd: niewłaściwe parametry procedury /tablica do zwyklej, zwykla do tablicy
+    // tablica od czegos do zwyklej powinno chyba dzialac
+  X błąd: powtórne użycie identyfikatora / taka sama nazwa w proc_head i decl 
+    // ogolnie 2x taka sama nazwa
+  x błąd: powtórne użycie identyfikatora / rekurencja
+    // tylko wczesniejsze 
+
+  //poza zakres tablicy
+
+  +czasem w errorach sie wywala
+
+    KNOWN ISSUES:
+      example4 krzyczy a nie powinno 
+      example9 krzyczy a nie powinno 
+      test0 krzyczy anie powinno
+      test1 krzyczy anie powinno
+      test2a krzyczy anie powinno
+      test2b krzyczy anie powinno
+      test2c krzyczy anie powinno
+      test2d krzyczy anie powinno
+    mnozenie/dzelenie/modulo moglo byc optymalniej
+
+*/

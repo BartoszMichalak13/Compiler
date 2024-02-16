@@ -1,0 +1,5 @@
+Wystarczy wpisać 
+
+make
+
+ i kompilator skompiluje się do programu "kompilator"
